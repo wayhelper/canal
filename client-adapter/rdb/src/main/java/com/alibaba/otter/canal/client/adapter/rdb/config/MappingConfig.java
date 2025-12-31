@@ -109,6 +109,16 @@ public class MappingConfig implements AdapterConfig {
         private int                 readBatch       = 5000;
         private int                 commitBatch     = 5000;                  // etl等批量提交大小
 
+        private String              customUpsertSql;                        // 新增：用于存储自定义的查询SQL
+
+        public String getCustomUpsertSql() {
+            return customUpsertSql;
+        }
+
+        public void setCustomUpsertSql(String customUpsertSql) {
+            this.customUpsertSql = customUpsertSql;
+        }
+
         private Map<String, String> allMapColumns;
 
         public boolean getMirrorDb() {

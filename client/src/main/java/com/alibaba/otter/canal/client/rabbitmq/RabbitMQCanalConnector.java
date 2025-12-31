@@ -122,14 +122,32 @@ public class RabbitMQCanalConnector implements CanalMQConnector {
 
         Consumer consumer = new DefaultConsumer(channel) {
 
-            @Override
+            /*@Override
             public void handleDelivery(String consumerTag, Envelope envelope, AMQP.BasicProperties properties,
                                        byte[] body) throws IOException {
 
                 if (body != null) {
                     channel.basicAck(envelope.getDeliveryTag(), process(body));
                 }
+            }*/
+            /*todo: 新增手动确认*/
+            @Override
+            public void handleDelivery(String consumerTag,
+                   Envelope envelope,
+                   AMQP.BasicProperties properties,
+                   byte[] body) throws IOException {
+                try {
+                    boolean success = process(body);
+                    if (success) {
+                        channel.basicAck(envelope.getDeliveryTag(), false);
+                    } else {
+                        channel.basicNack(envelope.getDeliveryTag(), false, true); // 回队
+                    }
+                } catch (Throwable t) {
+                    channel.basicNack(envelope.getDeliveryTag(), false, true); // 异常也回队
+                }
             }
+
         };
         try {
             channel.basicConsume(queueName, false, consumer);

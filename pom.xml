@@ -103,10 +103,10 @@
         <module>instance</module>
         <module>server</module>
         <module>client</module>
-        <module>deployer</module>
+<!--        <module>deployer</module>-->
         <module>example</module>
         <module>prometheus</module>
-        <module>admin</module>
+        <!--<module>admin</module>-->
         <module>client-adapter</module>
         <module>connector</module>
     </modules>
@@ -466,18 +466,6 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>${maven-surefire.version}</version>
-                <configuration>
-                    <useSystemClassLoader>true</useSystemClassLoader>
-                    <forkMode>once</forkMode>
-                    <argLine>${argline} ${jacocoArgLine}</argLine>
-                    <systemProperties>
-                        <!-- common shared -->
-                    </systemProperties>
-                	<parallel>classes</parallel>
-                	<useUnlimitedThreads>true</useUnlimitedThreads>
-                	<disableXmlReport>${closeTestReports}</disableXmlReport>
-
-                </configuration>
             </plugin>
             <!-- javadoc -->
             <plugin>

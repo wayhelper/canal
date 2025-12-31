@@ -1,14 +1,7 @@
 package com.alibaba.otter.canal.client.adapter.rdb.service;
 
-import java.sql.Connection;
-import java.sql.ResultSetMetaData;
-import java.sql.SQLException;
-import java.sql.Types;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Properties;
+import java.sql.*;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -31,6 +24,8 @@ import com.alibaba.otter.canal.client.adapter.rdb.support.SyncUtil;
 import com.alibaba.otter.canal.client.adapter.support.Dml;
 import com.alibaba.otter.canal.client.adapter.support.Util;
 
+import javax.sql.DataSource;
+
 /**
  * RDB同步操作业务
  *
@@ -40,8 +35,9 @@ import com.alibaba.otter.canal.client.adapter.support.Util;
 public class RdbSyncService {
 
     private static final Logger               logger  = LoggerFactory.getLogger(RdbSyncService.class);
+    private DataSource                        targetDS; // 源库
 
-    private DruidDataSource                   dataSource;
+    private DruidDataSource                   dataSource; //目标库
     // 源库表字段类型缓存: instance.schema.table -> <columnName, jdbcType>
     private Map<String, Map<String, Integer>> columnsTypeCache;
 
@@ -60,14 +56,15 @@ public class RdbSyncService {
         return columnsTypeCache;
     }
 
-    public RdbSyncService(DruidDataSource dataSource, Integer threads, boolean skipDupException){
-        this(dataSource, threads, new ConcurrentHashMap<>(), skipDupException);
+    public RdbSyncService(DruidDataSource dataSource,DataSource targetDS, Integer threads, boolean skipDupException){
+        this(dataSource,targetDS, threads, new ConcurrentHashMap<>(), skipDupException);
     }
 
     @SuppressWarnings("unchecked")
-    public RdbSyncService(DruidDataSource dataSource, Integer threads, Map<String, Map<String, Integer>> columnsTypeCache,
+    public RdbSyncService(DruidDataSource dataSource,DataSource targetDS, Integer threads, Map<String, Map<String, Integer>> columnsTypeCache,
                           boolean skipDupException){
         this.dataSource = dataSource;
+        this.targetDS = targetDS;
         this.columnsTypeCache = columnsTypeCache;
         this.skipDupException = skipDupException;
         try {
@@ -218,7 +215,7 @@ public class RdbSyncService {
      * @param config 对应配置对象
      * @param dml DML
      */
-    public void sync(BatchExecutor batchExecutor, MappingConfig config, SingleDml dml) {
+    /*public void sync(BatchExecutor batchExecutor, MappingConfig config, SingleDml dml) {
         if (config != null) {
             try {
                 String type = dml.getType();
@@ -237,6 +234,128 @@ public class RdbSyncService {
             } catch (SQLException e) {
                 throw new RuntimeException(e);
             }
+        }
+    }*/
+    public void sync(BatchExecutor batchExecutor, MappingConfig config, SingleDml dml) {
+        String type = dml.getType();
+        // 获取你在 yml 中配置的自定义 SQL
+        String customSql = config.getDbMapping().getCustomUpsertSql();
+
+        if (customSql != null && (type.equalsIgnoreCase("INSERT") || type.equalsIgnoreCase("UPDATE"))) {
+            // 1. 从当前 dml 提取主键值,若提取复合主键值，保持顺序
+            Map<String, String> targetPkMap = config.getDbMapping().getTargetPk();
+            List<Object> pkValues = new ArrayList<>(targetPkMap.size());
+
+            for (String targetPkField : targetPkMap.values()) {
+                Object val = dml.getData().get(targetPkField);
+                pkValues.add(val);
+            }
+            // 2. 去 MySQL 反查最新数据 (需实现 queryFromMysql 方法)
+            Map<String, Object> latestData = queryFromSource(customSql, pkValues);
+
+            if (latestData != null) {
+                // 3. 将反查结果同步到 Oracle (调用下面提到的 mergeInto 方法)
+                oracleMergeUpdate(batchExecutor, config, latestData);
+                logger.debug("Affected Oracle via custom upsert SQL for PK: {}", pkValues);
+            }
+        } else if (type.equalsIgnoreCase("DELETE")) {
+            try {
+                delete(batchExecutor, config, dml); // 删除逻辑保持不变，默认用主键
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
+    /**
+     * 反查源库
+     * @param sql
+     * @param pkValue
+     * @return
+     */
+    /**
+     * 反查源库（支持复合主键）
+     * SQL 示例：
+     * SELECT * FROM t WHERE pk1 = ? AND pk2 = ? AND pk3 = ?
+     */
+    private Map<String, Object> queryFromSource(String sql, List<Object> pkValues) {
+        try (Connection conn = targetDS.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
+            // 按顺序绑定所有主键
+            for (int i = 0; i < pkValues.size(); i++) {
+                pstmt.setObject(i + 1, pkValues.get(i));
+            }
+
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return SyncUtil.resultSetToMap(rs);
+                }
+            }
+        } catch (SQLException e) {
+            logger.error("反查源库失败, SQL: {}, PKs: {}", sql, pkValues, e);
+        }
+        return null;
+    }
+
+    private void oracleMergeUpdate(BatchExecutor batchExecutor, MappingConfig config, Map<String, Object> latestData) {
+        DbMapping dbMapping = config.getDbMapping();
+        String targetTable = dbMapping.getTargetTable();
+        // 动态获取目标库主键配置 Map (例如 { "cid": "cid" })
+        Map<String, String> targetPk = dbMapping.getTargetPk();
+        // 获取字段映射关系
+        Map<String, String> columnsMap = SyncUtil.getColumnsMap(dbMapping, latestData);
+        // 获取目标库（Oracle）字段类型缓存
+        Map<String, Integer> ctype = getTargetColumnType(batchExecutor.getConn(), config);
+
+        StringBuilder sql = new StringBuilder();
+        sql.append("MERGE INTO ").append(targetTable).append(" t ");
+        sql.append("USING (SELECT ");
+
+        List<Map<String, ?>> values = new ArrayList<>();
+
+        // 1. 构建 USING 部分：将反查的数据转为虚表源 (s)
+        columnsMap.forEach((targetCol, srcCol) -> {
+            sql.append("? AS ").append(targetCol).append(",");
+            Integer type = ctype.get(targetCol.toLowerCase());
+            BatchExecutor.setValue(values, type, latestData.get(srcCol));
+        });
+        sql.deleteCharAt(sql.length() - 1).append(" FROM DUAL) s ");
+
+        // 2. 构建 ON 部分：根据 targetPk 动态生成关联条件
+        sql.append("ON (");
+        // 遍历 targetPk 的所有键（目标字段名），如 cid
+        targetPk.keySet().forEach(pkName -> {
+            sql.append("t.").append(pkName).append(" = s.").append(pkName).append(" AND ");
+        });
+        sql.delete(sql.length() - 5, sql.length()).append(") "); // 移除多余的 AND
+
+        // 3. 构建更新部分 (WHEN MATCHED)
+        sql.append("WHEN MATCHED THEN UPDATE SET ");
+        columnsMap.keySet().forEach(col -> {
+            // 关键逻辑：只有当该列不属于 targetPk 时才允许更新
+            if (!targetPk.containsKey(col)) {
+                sql.append("t.").append(col).append(" = s.").append(col).append(",");
+            }
+        });
+        sql.deleteCharAt(sql.length() - 1);
+
+        // 4. 构建插入部分 (WHEN NOT MATCHED)
+        sql.append(" WHEN NOT MATCHED THEN INSERT (");
+        columnsMap.keySet().forEach(col -> sql.append(col).append(","));
+        sql.deleteCharAt(sql.length() - 1).append(") VALUES (");
+        columnsMap.keySet().forEach(col -> sql.append("s.").append(col).append(","));
+        sql.deleteCharAt(sql.length() - 1).append(")");
+
+        // 5. 执行同步
+        try {
+            batchExecutor.execute(sql.toString(), values);
+            if (logger.isDebugEnabled()) {
+                logger.debug("Oracle Merge SQL Executed: {}", sql.toString());
+            }
+        } catch (SQLException e) {
+            logger.error("Oracle Merge Error! Table: {}, SQL: {}", targetTable, sql.toString());
+            throw new RuntimeException(e);
         }
     }
 

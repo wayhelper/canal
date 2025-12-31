@@ -20,6 +20,8 @@ import com.alibaba.otter.canal.client.adapter.rdb.support.SingleDml;
 import com.alibaba.otter.canal.client.adapter.rdb.support.SyncUtil;
 import com.alibaba.otter.canal.client.adapter.support.Dml;
 
+import javax.sql.DataSource;
+
 /**
  * RDB镜像库同步操作业务
  *
@@ -34,12 +36,12 @@ public class RdbMirrorDbSyncService {
     private DruidDataSource             dataSource;
     private RdbSyncService              rdbSyncService;                                                // rdbSyncService代理
 
-    public RdbMirrorDbSyncService(Map<String, MirrorDbConfig> mirrorDbConfigCache, DruidDataSource dataSource,
+    public RdbMirrorDbSyncService(Map<String, MirrorDbConfig> mirrorDbConfigCache, DruidDataSource dataSource, DruidDataSource targetDS,
                                   Integer threads, Map<String, Map<String, Integer>> columnsTypeCache,
                                   boolean skipDupException){
         this.mirrorDbConfigCache = mirrorDbConfigCache;
         this.dataSource = dataSource;
-        this.rdbSyncService = new RdbSyncService(dataSource, threads, columnsTypeCache, skipDupException);
+        this.rdbSyncService = new RdbSyncService(dataSource, targetDS, threads, columnsTypeCache, skipDupException);
     }
 
     /**

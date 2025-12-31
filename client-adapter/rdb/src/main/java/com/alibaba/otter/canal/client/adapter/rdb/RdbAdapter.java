@@ -24,6 +24,8 @@ import com.alibaba.otter.canal.client.adapter.rdb.service.RdbSyncService;
 import com.alibaba.otter.canal.client.adapter.rdb.support.SyncUtil;
 import com.alibaba.otter.canal.client.adapter.support.*;
 
+import javax.sql.DataSource;
+
 /**
  * RDB适配器实现类
  *
@@ -119,17 +121,37 @@ public class RdbAdapter implements OuterAdapter {
             logger.error("ERROR ## failed to initial datasource: " + properties.get("jdbc.url"), e);
         }
 
-        String threads = properties.get("threads");
+/*        String threads = properties.get("threads");
         // String commitSize = properties.get("commitSize");
 
         boolean skipDupException = BooleanUtils.toBoolean(configuration.getProperties()
             .getOrDefault("skipDupException", "true"));
         rdbSyncService = new RdbSyncService(dataSource,
             threads != null ? Integer.valueOf(threads) : null,
-            skipDupException);
+            skipDupException);*/
+
+        String threads = properties.get("threads");
+        boolean skipDupException = BooleanUtils.toBoolean(configuration.getProperties()
+                .getOrDefault("skipDupException", "true"));
+
+// --- 新增代码：获取源库数据源 ---
+// 逻辑参考 RdbEtlService，从全局静态 Map 中获取
+// 注意：rdbMapping 可能包含多个配置，此处通常取第一个配置的 dataSourceKey
+
+        DruidDataSource sourceDS = null;
+        if (!rdbMapping.isEmpty()) {
+            MappingConfig firstConfig = rdbMapping.values().iterator().next();
+            sourceDS = DatasourceConfig.DATA_SOURCES.get(firstConfig.getDataSourceKey());
+        }
+
+// 修改：将 sourceDS (即 targetDS) 传入构造函数
+        rdbSyncService = new RdbSyncService(dataSource,
+                sourceDS, // 传入源库数据源
+                threads != null ? Integer.valueOf(threads) : null,
+                skipDupException);
 
         rdbMirrorDbSyncService = new RdbMirrorDbSyncService(mirrorDbConfigCache,
-            dataSource,
+            dataSource, sourceDS,
             threads != null ? Integer.valueOf(threads) : null,
             rdbSyncService.getColumnsTypeCache(),
             skipDupException);

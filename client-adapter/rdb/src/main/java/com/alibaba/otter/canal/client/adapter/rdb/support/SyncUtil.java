@@ -320,4 +320,22 @@ public class SyncUtil {
                 return "";
         }
     }
+
+    /**
+     * @param rs 结果集
+     * @return
+     * @throws SQLException
+     */
+    public static Map<String, Object> resultSetToMap(ResultSet rs) throws SQLException {
+        Map<String, Object> map = new LinkedHashMap<>();
+        ResultSetMetaData metaData = rs.getMetaData();
+        int columnCount = metaData.getColumnCount();
+        for (int i = 1; i <= columnCount; i++) {
+            // 获取列名并存入 Map，Oracle 建议统一用大写或保持原样
+            String columnName = metaData.getColumnLabel(i);
+            Object value = rs.getObject(i);
+            map.put(columnName, value);
+        }
+        return map;
+    }
 }
