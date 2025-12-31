@@ -215,27 +215,6 @@ public class RdbSyncService {
      * @param config 对应配置对象
      * @param dml DML
      */
-    /*public void sync(BatchExecutor batchExecutor, MappingConfig config, SingleDml dml) {
-        if (config != null) {
-            try {
-                String type = dml.getType();
-                if (type != null && type.equalsIgnoreCase("INSERT")) {
-                    insert(batchExecutor, config, dml);
-                } else if (type != null && type.equalsIgnoreCase("UPDATE")) {
-                    update(batchExecutor, config, dml);
-                } else if (type != null && type.equalsIgnoreCase("DELETE")) {
-                    delete(batchExecutor, config, dml);
-                } else if (type != null && type.equalsIgnoreCase("TRUNCATE")) {
-                    truncate(batchExecutor, config);
-                }
-                if (logger.isDebugEnabled()) {
-                    logger.debug("DML: {}", JSON.toJSONString(dml, Feature.WriteNulls));
-                }
-            } catch (SQLException e) {
-                throw new RuntimeException(e);
-            }
-        }
-    }*/
     public void sync(BatchExecutor batchExecutor, MappingConfig config, SingleDml dml) {
         String type = dml.getType();
         // 获取你在 yml 中配置的自定义 SQL
@@ -246,21 +225,30 @@ public class RdbSyncService {
             Map<String, String> targetPkMap = config.getDbMapping().getTargetPk();
             List<Object> pkValues = new ArrayList<>(targetPkMap.size());
 
-            for (String targetPkField : targetPkMap.values()) {
-                Object val = dml.getData().get(targetPkField);
+            for (String targetPkColumn : targetPkMap.values()) {
+                Object val = dml.getData().get(targetPkColumn);
+                if (val == null) {
+                    // 预防性检查：如果 DML 数据中缺少主键列，记录警告
+                    logger.warn("主键列 [{}] 在 DML 数据中不存在", targetPkColumn);
+                }
                 pkValues.add(val);
             }
             // 2. 去 MySQL 反查最新数据 (需实现 queryFromMysql 方法)
             Map<String, Object> latestData = queryFromSource(customSql, pkValues);
-
-            if (latestData != null) {
-                // 3. 将反查结果同步到 Oracle (调用下面提到的 mergeInto 方法)
-                oracleMergeUpdate(batchExecutor, config, latestData);
-                logger.debug("Affected Oracle via custom upsert SQL for PK: {}", pkValues);
+            logger.info("type={}, latestData={}", type, latestData);
+            if (latestData != null && type.equalsIgnoreCase("INSERT")) {
+                // 传入反查到的最新数据进行插入
+                insertFromSource(batchExecutor, config, latestData);
+            } else if (latestData != null && type.equalsIgnoreCase("UPDATE")) {
+                // 传入反查到的最新数据进行更新
+                updateFromSource(batchExecutor, config, dml, latestData);
+            } else {
+                // 4. 若反查结果为空,先跳过并打印日志
+                logger.warn("反查结果为空,跳过同步. type={}, pkValues={}", type, JSON.toJSONString(pkValues, Feature.WriteNulls));
             }
         } else if (type.equalsIgnoreCase("DELETE")) {
             try {
-                delete(batchExecutor, config, dml); // 删除逻辑保持不变，默认用主键
+                delete(batchExecutor, config, dml);
             } catch (SQLException e) {
                 throw new RuntimeException(e);
             }
@@ -284,7 +272,7 @@ public class RdbSyncService {
 
             // 按顺序绑定所有主键
             for (int i = 0; i < pkValues.size(); i++) {
-                pstmt.setObject(i + 1, pkValues.get(i));
+                pstmt.setObject(i + 1, pkValues.get(pkValues.size()-(i+1)));
             }
 
             try (ResultSet rs = pstmt.executeQuery()) {
@@ -298,195 +286,81 @@ public class RdbSyncService {
         return null;
     }
 
-    private void oracleMergeUpdate(BatchExecutor batchExecutor, MappingConfig config, Map<String, Object> latestData) {
+    private void insertFromSource(BatchExecutor batchExecutor, MappingConfig config, Map<String, Object> latestData) {
         DbMapping dbMapping = config.getDbMapping();
-        String targetTable = dbMapping.getTargetTable();
-        // 动态获取目标库主键配置 Map (例如 { "cid": "cid" })
-        Map<String, String> targetPk = dbMapping.getTargetPk();
-        // 获取字段映射关系
-        Map<String, String> columnsMap = SyncUtil.getColumnsMap(dbMapping, latestData);
-        // 获取目标库（Oracle）字段类型缓存
+        // 获取目标库（Oracle）的字段类型缓存
         Map<String, Integer> ctype = getTargetColumnType(batchExecutor.getConn(), config);
 
-        StringBuilder sql = new StringBuilder();
-        sql.append("MERGE INTO ").append(targetTable).append(" t ");
-        sql.append("USING (SELECT ");
-
-        List<Map<String, ?>> values = new ArrayList<>();
-
-        // 1. 构建 USING 部分：将反查的数据转为虚表源 (s)
-        columnsMap.forEach((targetCol, srcCol) -> {
-            sql.append("? AS ").append(targetCol).append(",");
-            Integer type = ctype.get(targetCol.toLowerCase());
-            BatchExecutor.setValue(values, type, latestData.get(srcCol));
-        });
-        sql.deleteCharAt(sql.length() - 1).append(" FROM DUAL) s ");
-
-        // 2. 构建 ON 部分：根据 targetPk 动态生成关联条件
-        sql.append("ON (");
-        // 遍历 targetPk 的所有键（目标字段名），如 cid
-        targetPk.keySet().forEach(pkName -> {
-            sql.append("t.").append(pkName).append(" = s.").append(pkName).append(" AND ");
-        });
-        sql.delete(sql.length() - 5, sql.length()).append(") "); // 移除多余的 AND
-
-        // 3. 构建更新部分 (WHEN MATCHED)
-        sql.append("WHEN MATCHED THEN UPDATE SET ");
-        columnsMap.keySet().forEach(col -> {
-            // 关键逻辑：只有当该列不属于 targetPk 时才允许更新
-            if (!targetPk.containsKey(col)) {
-                sql.append("t.").append(col).append(" = s.").append(col).append(",");
-            }
-        });
-        sql.deleteCharAt(sql.length() - 1);
-
-        // 4. 构建插入部分 (WHEN NOT MATCHED)
-        sql.append(" WHEN NOT MATCHED THEN INSERT (");
-        columnsMap.keySet().forEach(col -> sql.append(col).append(","));
-        sql.deleteCharAt(sql.length() - 1).append(") VALUES (");
-        columnsMap.keySet().forEach(col -> sql.append("s.").append(col).append(","));
-        sql.deleteCharAt(sql.length() - 1).append(")");
-
-        // 5. 执行同步
-        try {
-            batchExecutor.execute(sql.toString(), values);
-            if (logger.isDebugEnabled()) {
-                logger.debug("Oracle Merge SQL Executed: {}", sql.toString());
-            }
-        } catch (SQLException e) {
-            logger.error("Oracle Merge Error! Table: {}, SQL: {}", targetTable, sql.toString());
-            throw new RuntimeException(e);
-        }
-    }
-
-    /**
-     * 插入操作
-     *
-     * @param config 配置项
-     * @param dml DML数据
-     */
-    private void insert(BatchExecutor batchExecutor, MappingConfig config, SingleDml dml) throws SQLException {
-        Map<String, Object> data = dml.getData();
-        if (data == null || data.isEmpty()) {
-            return;
-        }
-
-        DbMapping dbMapping = config.getDbMapping();
-        String backtick = SyncUtil.getBacktickByDbType(dataSource.getDbType());
-        Map<String, String> columnsMap = SyncUtil.getColumnsMap(dbMapping, data);
-
+        // 构建 SQL
         StringBuilder insertSql = new StringBuilder();
         insertSql.append("INSERT INTO ").append(SyncUtil.getDbTableName(dbMapping, dataSource.getDbType())).append(" (");
 
-        columnsMap.forEach((targetColumnName, srcColumnName) -> insertSql.append(backtick)
-            .append(targetColumnName)
-            .append(backtick)
-            .append(","));
-        int len = insertSql.length();
-        insertSql.delete(len - 1, len).append(") VALUES (");
-        int mapLen = columnsMap.size();
-        for (int i = 0; i < mapLen; i++) {
-            insertSql.append("?,");
-        }
-        len = insertSql.length();
-        insertSql.delete(len - 1, len).append(")");
-
-        Map<String, Integer> ctype = getTargetColumnType(batchExecutor.getConn(), config);
-
+        // 映射字段：targetColumn -> sourceColumn
+        Map<String, String> columnsMap = SyncUtil.getColumnsMap(dbMapping, latestData);
         List<Map<String, ?>> values = new ArrayList<>();
+
+        StringJoiner columns = new StringJoiner(",");
+        StringJoiner placeholders = new StringJoiner(",");
+
         for (Map.Entry<String, String> entry : columnsMap.entrySet()) {
             String targetColumnName = entry.getKey();
-            String srcColumnName = entry.getValue();
-            if (srcColumnName == null) {
-                srcColumnName = Util.cleanColumn(targetColumnName);
-            }
+            String srcColumnName = entry.getValue() != null ? entry.getValue() : Util.cleanColumn(targetColumnName);
 
+            // 拼接 SQL 部分
+            columns.add(targetColumnName);
+            placeholders.add("?");
+
+            // 设置参数值
             Integer type = ctype.get(Util.cleanColumn(targetColumnName).toLowerCase());
             if (type == null) {
-                throw new RuntimeException("Target column: " + targetColumnName + " not matched");
+                throw new RuntimeException("Oracle target column: " + targetColumnName + " not found in metadata");
             }
-            Object value = data.get(srcColumnName);
+            Object value = latestData.get(srcColumnName);
             BatchExecutor.setValue(values, type, value);
         }
+
+        insertSql.append(columns.toString()).append(") VALUES (").append(placeholders.toString()).append(")");
 
         try {
             batchExecutor.execute(insertSql.toString(), values);
         } catch (SQLException e) {
-            if (skipDupException
-                && (e.getMessage().contains("Duplicate entry") || e.getMessage().contains("duplicate key") || e.getMessage().startsWith("ORA-00001:"))) {
-                // ignore
-                // TODO 增加更多关系数据库的主键冲突的错误码
+            // 针对 Oracle 的主键冲突异常 (ORA-00001) 进行处理
+            if (skipDupException && e.getMessage().contains("ORA-00001")) {
+                logger.warn("Oracle 主键冲突，已跳过: {}", e.getMessage());
             } else {
-                throw e;
+                throw new RuntimeException(e);
             }
         }
-        if (logger.isTraceEnabled()) {
-            logger.trace("Insert into target table, sql: {}", insertSql);
-        }
-
     }
 
-    /**
-     * 更新操作
-     *
-     * @param config 配置项
-     * @param dml DML数据
-     */
-    private void update(BatchExecutor batchExecutor, MappingConfig config, SingleDml dml) throws SQLException {
-        Map<String, Object> data = dml.getData();
-        if (data == null || data.isEmpty()) {
-            return;
-        }
-
-        Map<String, Object> old = dml.getOld();
-        if (old == null || old.isEmpty()) {
-            return;
-        }
-
+    private void updateFromSource(BatchExecutor batchExecutor, MappingConfig config, SingleDml dml, Map<String, Object> latestData) {
         DbMapping dbMapping = config.getDbMapping();
-        String backtick = SyncUtil.getBacktickByDbType(dataSource.getDbType());
-        Map<String, String> columnsMap = SyncUtil.getColumnsMap(dbMapping, data);
-
         Map<String, Integer> ctype = getTargetColumnType(batchExecutor.getConn(), config);
-
+        Map<String, String> columnsMap = SyncUtil.getColumnsMap(dbMapping, latestData);
         StringBuilder updateSql = new StringBuilder();
         updateSql.append("UPDATE ").append(SyncUtil.getDbTableName(dbMapping, dataSource.getDbType())).append(" SET ");
         List<Map<String, ?>> values = new ArrayList<>();
-        boolean hasMatched = false;
-        for (String srcColumnName : old.keySet()) {
-            List<String> targetColumnNames = new ArrayList<>();
-            columnsMap.forEach((targetColumn, srcColumn) -> {
-                if (srcColumnName.equalsIgnoreCase(srcColumn)) {
-                    targetColumnNames.add(targetColumn);
-                }
-            });
-            if (!targetColumnNames.isEmpty()) {
-                hasMatched = true;
-                for (String targetColumnName : targetColumnNames) {
-                    updateSql.append(backtick).append(targetColumnName).append(backtick).append("=?, ");
-                    Integer type = ctype.get(Util.cleanColumn(targetColumnName).toLowerCase());
-                    if (type == null) {
-                        throw new RuntimeException("Target column: " + targetColumnName + " not matched");
-                    }
-                    BatchExecutor.setValue(values, type, data.get(srcColumnName));
-                }
+        StringJoiner setClauses = new StringJoiner(", ");
+        // 1. 构建 SET 部分（同步反查到的所有非主键字段，或者根据业务逻辑筛选）
+        for (Map.Entry<String, String> entry : columnsMap.entrySet()) {
+            String targetCol = entry.getKey();
+            // 如果不是主键，则加入 SET 语句
+            if (!dbMapping.getTargetPk().containsKey(targetCol)) {
+                setClauses.add(targetCol + "=?");
+                Integer type = ctype.get(Util.cleanColumn(targetCol).toLowerCase());
+                BatchExecutor.setValue(values, type, latestData.get(entry.getValue()));
             }
         }
-        if (!hasMatched) {
-            logger.warn("Did not matched any columns to update ");
-            return;
-        }
-        int len = updateSql.length();
-        updateSql.delete(len - 2, len).append(" WHERE ");
-
-        // 拼接主键
-        appendCondition(dbMapping, updateSql, ctype, values, data, old);
-        batchExecutor.execute(updateSql.toString(), values);
-        if (logger.isTraceEnabled()) {
-            logger.trace("Update target table, sql: {}", updateSql);
+        updateSql.append(setClauses.toString()).append(" WHERE ");
+        // 2. 构建 WHERE 条件（使用主键）
+        // 注意：这里需要把主键的值追加到 values 列表的最后
+        appendCondition(dbMapping, updateSql, ctype, values, latestData);
+        try {
+            batchExecutor.execute(updateSql.toString(), values);
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
         }
     }
-
     /**
      * 删除操作
      *
