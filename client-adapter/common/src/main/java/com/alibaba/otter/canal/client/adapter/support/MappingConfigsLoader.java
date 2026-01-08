@@ -16,6 +16,10 @@ public class MappingConfigsLoader {
 
         // 先取本地文件，再取类路径
         File configDir = new File(".." + File.separator + Constant.CONF_DIR + File.separator + name);
+        String home = System.getProperty("canal.conf.dir");
+        if (home != null) {
+            configDir = new File(home + File.separator + File.separator + name);
+        }
         if (!configDir.exists()) {
             URL url = MappingConfigsLoader.class.getClassLoader().getResource("");
             if (url != null) {

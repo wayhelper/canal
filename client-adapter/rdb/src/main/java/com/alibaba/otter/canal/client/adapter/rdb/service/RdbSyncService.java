@@ -235,7 +235,6 @@ public class RdbSyncService {
             }
             // 2. 去 MySQL 反查最新数据 (需实现 queryFromMysql 方法)
             Map<String, Object> latestData = queryFromSource(customSql, pkValues);
-            logger.info("type={}, latestData={}", type, latestData);
             if (latestData != null && type.equalsIgnoreCase("INSERT")) {
                 // 传入反查到的最新数据进行插入
                 insertFromSource(batchExecutor, config, latestData);
@@ -335,30 +334,51 @@ public class RdbSyncService {
 
     private void updateFromSource(BatchExecutor batchExecutor, MappingConfig config, SingleDml dml, Map<String, Object> latestData) {
         DbMapping dbMapping = config.getDbMapping();
+        // 统一转为小写获取类型映射
         Map<String, Integer> ctype = getTargetColumnType(batchExecutor.getConn(), config);
+        // 映射关系：TargetColumn -> SourceColumn
         Map<String, String> columnsMap = SyncUtil.getColumnsMap(dbMapping, latestData);
+
         StringBuilder updateSql = new StringBuilder();
         updateSql.append("UPDATE ").append(SyncUtil.getDbTableName(dbMapping, dataSource.getDbType())).append(" SET ");
+
         List<Map<String, ?>> values = new ArrayList<>();
         StringJoiner setClauses = new StringJoiner(", ");
-        // 1. 构建 SET 部分（同步反查到的所有非主键字段，或者根据业务逻辑筛选）
+
+        // 1. 构建 SET 部分：必须排除主键字段
         for (Map.Entry<String, String> entry : columnsMap.entrySet()) {
             String targetCol = entry.getKey();
-            // 如果不是主键，则加入 SET 语句
-            if (!dbMapping.getTargetPk().containsKey(targetCol)) {
+            String srcCol = entry.getValue() != null ? entry.getValue() : Util.cleanColumn(targetCol);
+
+            // 获取主键配置（注意大小写敏感度）
+            boolean isPk = dbMapping.getTargetPk().containsKey(targetCol);
+
+            if (!isPk) {
                 setClauses.add(targetCol + "=?");
+                // 统一使用清洗后的名称去获取 JDBC 类型
                 Integer type = ctype.get(Util.cleanColumn(targetCol).toLowerCase());
-                BatchExecutor.setValue(values, type, latestData.get(entry.getValue()));
+                if (type == null) {
+                    throw new RuntimeException("Target column: " + targetCol + " not found in metadata");
+                }
+                BatchExecutor.setValue(values, type, latestData.get(srcCol));
             }
         }
+
+        if (values.isEmpty()) {
+            logger.warn("没有检测到需要更新的非主键字段，跳过更新。Table: {}", dbMapping.getTable());
+            return;
+        }
+
         updateSql.append(setClauses.toString()).append(" WHERE ");
-        // 2. 构建 WHERE 条件（使用主键）
-        // 注意：这里需要把主键的值追加到 values 列表的最后
+
+        // 2. 构建 WHERE 条件：追加主键及其对应的值
+        // appendCondition 会负责把主键值按顺序 add 到 values 列表末尾
         appendCondition(dbMapping, updateSql, ctype, values, latestData);
+
         try {
             batchExecutor.execute(updateSql.toString(), values);
         } catch (SQLException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException("Update failed for table " + dbMapping.getTable(), e);
         }
     }
     /**

@@ -1,0 +1,56 @@
+dataSourceKey: webporDS #无需修改
+destination: oracle #这个对应application.yml文件中的
+groupId: g1
+outerAdapterKey: oracle1
+concurrent: true
+dbMapping:
+  database: cstwebpor #源数据库名
+  table: gz_et_build #源数据库表名
+  targetTable: gz_et_build #同步到目标服务器对应的表名
+  targetPk: 
+    buildid: buildid # 主键，格式为, 源表主键名:目标表主键名
+  mapAll: true # 映射所有字段，这里改为true的话，下面的targetColumns就可以不用改了，除非两边的数据结构不一样
+  targetColumns:
+    buildid:
+  customUpsertSql: >
+    SELECT
+      BUILDID
+    , PROJECTID
+    ,CASE WHEN CITYCODE='230600' THEN '1'
+        WHEN CITYCODE='230605' THEN '2'
+        WHEN CITYCODE='230604' THEN '3'
+        WHEN CITYCODE='230603' THEN '4'
+        WHEN CITYCODE='230606' THEN '5'
+        WHEN CITYCODE='230671' THEN '6'
+        WHEN CITYCODE='230602' THEN '7'
+        ELSE '' END AS DISTRICTID
+    , PARCELNO
+    , NAME
+    , BUILDNO
+    , BUILDLABEL
+    , TUNO
+    , QVNO
+    , QIUNO
+    , ZHUANGNO
+    , CJNO
+    ,CASE WHEN ORIENT='B010009' THEN 'B010010'
+        ELSE ORIENT END AS ORIENT
+    , FAR
+    , REMARK
+    , STATUS
+    , TOWNS
+    , STREET
+    , COMMUNITY
+    , BUILDCODE
+    FROM GZ_ET_BUILD
+    where buildid=?
+  commitBatch: 3000 # 批量提交的大小，保持不动即可
+#dataSourceKey: defaultDS
+#destination: rabbitmq
+#groupId: g1
+#outerAdapterKey: mysql1 # 需要跟上面保持一致
+#concurrent: true
+#dbMapping:
+#  mirrorDb: true
+#  配置数据库，需要提前创建
+#  database: cstauth

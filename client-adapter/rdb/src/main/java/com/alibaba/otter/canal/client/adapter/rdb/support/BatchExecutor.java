@@ -59,7 +59,7 @@ public class BatchExecutor implements Closeable {
             Object value = values.get(i).get("value");
             SyncUtil.setPStmt(type, pstmt, value, i + 1);
         }
-
+        logger.info("执行SQL: {}, values: {}", sql, values);
         pstmt.execute();
         idx.incrementAndGet();
         pstmt.close();

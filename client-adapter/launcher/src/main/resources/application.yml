@@ -1,5 +1,5 @@
 server:
-  port: 8081
+  port: 8888
 spring:
   jackson:
     date-format: yyyy-MM-dd HH:mm:ss
@@ -11,13 +11,13 @@ canal.conf:
   flatMessage: true
   zookeeperHosts:
   syncBatchSize: 1000
-  retries: -1
+  retries: 0
   timeout:
   accessKey:
   secretKey:
   consumerProperties:
-    # canal tcp consumer
-    canal.tcp.server.host: 127.0.0.1:11111
+    # canal tcp consumer canal deployer 服务端地址
+    canal.tcp.server.host: 192.168.31.223:11111
     canal.tcp.zookeeper.hosts:
     canal.tcp.batch.size: 500
     canal.tcp.username:
@@ -40,39 +40,31 @@ canal.conf:
     rocketmq.access.channel:
     rocketmq.subscribe.filter:
     # rabbitMQ consumer
-    rabbitmq.host:
-    rabbitmq.virtual.host:
-    rabbitmq.username:
-    rabbitmq.password:
+    rabbitmq.host: 192.168.31.223
+    rabbitmq.virtual.host: /console
+    rabbitmq.username: console
+    rabbitmq.password: console
     rabbitmq.resource.ownerId:
 
-#  srcDataSources:
-#    defaultDS:
-#      url: jdbc:mysql://127.0.0.1:3306/mytest?useUnicode=true
-#      username: root
-#      password: 121212
+  srcDataSources:
+    webporDS:
+      url: jdbc:mysql://192.168.31.222:3306/cstwebpor?useUnicode=true
+      username: root
+      password: hzgzsoft
+      maxActive: 100 #额外增加这一行，默认的连接数只有3，会导致全量同步出现异常，导致全量同步数据缺失，最好改大一点
   canalAdapters:
-  - instance: example # canal instance Name or mq topic name
+  - instance: oracle # canal instance Name or mq topic name   example
     groups:
     - groupId: g1
       outerAdapters:
       - name: logger
-#      - name: rdb
-#        key: mysql1
-#        properties:
-#          jdbc.driverClassName: com.mysql.jdbc.Driver
-#          jdbc.url: jdbc:mysql://127.0.0.1:3306/mytest2?useUnicode=true
-#          jdbc.username: root
-#          jdbc.password: 121212
-#          druid.stat.enable: false
-#          druid.stat.slowSqlMillis: 1000
-#      - name: rdb
-#        key: oracle1
-#        properties:
-#          jdbc.driverClassName: oracle.jdbc.OracleDriver
-#          jdbc.url: jdbc:oracle:thin:@localhost:49161:XE
-#          jdbc.username: mytest
-#          jdbc.password: m121212
+      - name: rdb
+        key: oracle1
+        properties:
+          jdbc.driverClassName: oracle.jdbc.OracleDriver
+          jdbc.url: jdbc:oracle:thin:@194.1.1.240:1521:oneserver
+          jdbc.username: dqwebpor
+          jdbc.password: dqwebpor
 #      - name: rdb
 #        key: postgres1
 #        properties:
@@ -91,27 +83,15 @@ canal.conf:
 #        hosts: 127.0.0.1:9300 # 127.0.0.1:9200 for rest mode
 #        properties:
 #          mode: transport # or rest
-#          # security.ca.path: /etc/es8/ca.crt
 #          # security.auth: test:123456 #  only used for rest mode
 #          cluster.name: elasticsearch
-#      - name: kudu
-#        key: kudu
+#        - name: kudu
+#          key: kudu
+#          properties:
+#            kudu.master.address: 127.0.0.1 # ',' split multi address
+#      - name: es7
+#        hosts: 192.168.31.222:9300 # 127.0.0.1:9200 for rest mode
 #        properties:
-#          kudu.master.address: 127.0.0.1 # ',' split multi address
-#      - name: phoenix
-#        key: phoenix
-#        properties:
-#          jdbc.driverClassName: org.apache.phoenix.jdbc.PhoenixDriver
-#          jdbc.url: jdbc:phoenix:127.0.0.1:2181:/hbase/db
-#          jdbc.username:
-#          jdbc.password:
-#      - name: clickhouse
-#        key: clickhouse1
-#        properties:
-#          jdbc.driverClassName: ru.yandex.clickhouse.ClickHouseDriver
-#          jdbc.url: jdbc:clickhouse://127.0.0.1:8123/default
-#          jdbc.username: default
-#          jdbc.password: 123456
-#          batchSize: 3000
-#          scheduleTime: 600   # second unit
-#          threads: 3          # parallel threads
+#          mode: transport # or rest
+#           security.auth: test:123456 #  only used for rest mode
+#          cluster.name: gz-construct

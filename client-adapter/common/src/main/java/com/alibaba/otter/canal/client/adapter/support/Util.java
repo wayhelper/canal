@@ -103,6 +103,14 @@ public class Util {
     }
 
     public static File getConfDirPath(String subConf) {
+        String confDir = System.getProperty("canal.conf.dir");
+        if (StringUtils.isNotBlank(confDir)) {
+            File dir = new File(confDir, StringUtils.trimToEmpty(subConf));
+            if (dir.exists()) {
+                return dir;
+            }
+            throw new RuntimeException("Config dir not found: " + dir.getAbsolutePath());
+        }
         URL url = Util.class.getClassLoader().getResource("");
         String path;
         if (url != null) {

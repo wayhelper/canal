@@ -298,9 +298,9 @@ public class ExtensionLoader<T> {
         }
         // 只加载外部spi, 不加载classpath
         // 2. load inner extension class with default classLoader
-        // ClassLoader classLoader = findClassLoader();
-        // loadFile(extensionClasses, CANAL_DIRECTORY, classLoader);
-        // loadFile(extensionClasses, SERVICES_DIRECTORY, classLoader);
+         ClassLoader classLoader = findClassLoader();
+         loadFile(extensionClasses, CANAL_DIRECTORY, classLoader);
+         loadFile(extensionClasses, SERVICES_DIRECTORY, classLoader);
 
         return extensionClasses;
     }
