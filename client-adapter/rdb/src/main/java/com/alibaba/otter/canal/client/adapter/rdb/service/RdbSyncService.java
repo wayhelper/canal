@@ -35,7 +35,7 @@ import javax.sql.DataSource;
 public class RdbSyncService {
 
     private static final Logger               logger  = LoggerFactory.getLogger(RdbSyncService.class);
-    private DataSource                        targetDS; // 源库
+    private Map<String,DruidDataSource>       targetDS; // 源库
 
     private DruidDataSource                   dataSource; //目标库
     // 源库表字段类型缓存: instance.schema.table -> <columnName, jdbcType>
@@ -56,12 +56,12 @@ public class RdbSyncService {
         return columnsTypeCache;
     }
 
-    public RdbSyncService(DruidDataSource dataSource,DataSource targetDS, Integer threads, boolean skipDupException){
+    public RdbSyncService(DruidDataSource dataSource,Map<String,DruidDataSource> targetDS, Integer threads, boolean skipDupException){
         this(dataSource,targetDS, threads, new ConcurrentHashMap<>(), skipDupException);
     }
 
     @SuppressWarnings("unchecked")
-    public RdbSyncService(DruidDataSource dataSource,DataSource targetDS, Integer threads, Map<String, Map<String, Integer>> columnsTypeCache,
+    public RdbSyncService(DruidDataSource dataSource,Map<String,DruidDataSource> targetDS, Integer threads, Map<String, Map<String, Integer>> columnsTypeCache,
                           boolean skipDupException){
         this.dataSource = dataSource;
         this.targetDS = targetDS;
@@ -234,7 +234,7 @@ public class RdbSyncService {
                 pkValues.add(val);
             }
             // 2. 去 MySQL 反查最新数据 (需实现 queryFromMysql 方法)
-            Map<String, Object> latestData = queryFromSource(customSql, pkValues);
+            Map<String, Object> latestData = queryFromSource(config, customSql, pkValues);
             if (latestData != null && type.equalsIgnoreCase("INSERT")) {
                 // 传入反查到的最新数据进行插入
                 insertFromSource(batchExecutor, config, latestData);
@@ -265,8 +265,8 @@ public class RdbSyncService {
      * SQL 示例：
      * SELECT * FROM t WHERE pk1 = ? AND pk2 = ? AND pk3 = ?
      */
-    private Map<String, Object> queryFromSource(String sql, List<Object> pkValues) {
-        try (Connection conn = targetDS.getConnection();
+    private Map<String, Object> queryFromSource(MappingConfig config, String sql, List<Object> pkValues) {
+        try (Connection conn = targetDS.get(config.getDataSourceKey()).getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
 
             // 按顺序绑定所有主键
@@ -405,21 +405,6 @@ public class RdbSyncService {
         batchExecutor.execute(sql.toString(), values);
         if (logger.isTraceEnabled()) {
             logger.trace("Delete from target table, sql: {}", sql);
-        }
-    }
-
-    /**
-     * truncate操作
-     *
-     * @param config
-     */
-    private void truncate(BatchExecutor batchExecutor, MappingConfig config) throws SQLException {
-        DbMapping dbMapping = config.getDbMapping();
-        StringBuilder sql = new StringBuilder();
-        sql.append("TRUNCATE TABLE ").append(SyncUtil.getDbTableName(dbMapping, dataSource.getDbType()));
-        batchExecutor.execute(sql.toString(), new ArrayList<>());
-        if (logger.isTraceEnabled()) {
-            logger.trace("Truncate target table, sql: {}", sql);
         }
     }
 

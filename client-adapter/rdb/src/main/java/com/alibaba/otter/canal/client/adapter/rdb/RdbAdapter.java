@@ -103,10 +103,6 @@ public class RdbAdapter implements OuterAdapter {
         dataSource.setUseUnfairLock(true);
         dataSource.setDbType(dbType);
 
-        // List<String> array = new ArrayList<>();
-        // array.add("set names utf8mb4;");
-        // dataSource.setConnectionInitSqls(array);
-
         if ("true".equals(properties.getOrDefault("druid.stat.enable", "true"))) {
             StatFilter statFilter = new StatFilter();
             statFilter.setSlowSqlMillis(Long.parseLong(properties.getOrDefault("druid.stat.slowSqlMillis", "1000")));
@@ -121,30 +117,23 @@ public class RdbAdapter implements OuterAdapter {
             logger.error("ERROR ## failed to initial datasource: " + properties.get("jdbc.url"), e);
         }
 
-/*        String threads = properties.get("threads");
-        // String commitSize = properties.get("commitSize");
-
-        boolean skipDupException = BooleanUtils.toBoolean(configuration.getProperties()
-            .getOrDefault("skipDupException", "true"));
-        rdbSyncService = new RdbSyncService(dataSource,
-            threads != null ? Integer.valueOf(threads) : null,
-            skipDupException);*/
-
         String threads = properties.get("threads");
         boolean skipDupException = BooleanUtils.toBoolean(configuration.getProperties()
                 .getOrDefault("skipDupException", "true"));
 
-// --- 新增代码：获取源库数据源 ---
-// 逻辑参考 RdbEtlService，从全局静态 Map 中获取
-// 注意：rdbMapping 可能包含多个配置，此处通常取第一个配置的 dataSourceKey
+        // --- 新增代码：获取源库数据源 ---
+        // 逻辑参考 RdbEtlService，从全局静态 Map 中获取
+        // 注意：rdbMapping 可能包含多个配置，此处通常取第一个配置的 dataSourceKey
 
-        DruidDataSource sourceDS = null;
+        Map<String,DruidDataSource> sourceDS = new ConcurrentHashMap<>();
         if (!rdbMapping.isEmpty()) {
-            MappingConfig firstConfig = rdbMapping.values().iterator().next();
-            sourceDS = DatasourceConfig.DATA_SOURCES.get(firstConfig.getDataSourceKey());
+            rdbMapping.values().forEach(config->{
+                System.out.println("dataSourceKey: " + DatasourceConfig.DATA_SOURCES.keySet());
+                sourceDS.put(config.getDataSourceKey(), DatasourceConfig.DATA_SOURCES.get(config.getDataSourceKey()));
+            });
         }
 
-// 修改：将 sourceDS (即 targetDS) 传入构造函数
+        // 修改：将 sourceDS (即 targetDS) 传入构造函数
         rdbSyncService = new RdbSyncService(dataSource,
                 sourceDS, // 传入源库数据源
                 threads != null ? Integer.valueOf(threads) : null,

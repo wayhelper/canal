@@ -36,7 +36,7 @@ public class RdbMirrorDbSyncService {
     private DruidDataSource             dataSource;
     private RdbSyncService              rdbSyncService;                                                // rdbSyncService代理
 
-    public RdbMirrorDbSyncService(Map<String, MirrorDbConfig> mirrorDbConfigCache, DruidDataSource dataSource, DruidDataSource targetDS,
+    public RdbMirrorDbSyncService(Map<String, MirrorDbConfig> mirrorDbConfigCache, DruidDataSource dataSource, Map<String,DruidDataSource> targetDS,
                                   Integer threads, Map<String, Map<String, Integer>> columnsTypeCache,
                                   boolean skipDupException){
         this.mirrorDbConfigCache = mirrorDbConfigCache;
