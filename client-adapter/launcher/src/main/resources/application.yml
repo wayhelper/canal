@@ -49,22 +49,26 @@ canal.conf:
   srcDataSources:
     webporDS:
       url: jdbc:mysql://192.168.31.222:3306/cstwebpor?useUnicode=true
-      username: root
-      password: hzgzsoft
+      username: gzcstwebpor
+      password: gzcstwebpor
       maxActive: 100 #额外增加这一行，默认的连接数只有3，会导致全量同步出现异常，导致全量同步数据缺失，最好改大一点
+    authDS:
+      url: jdbc:mysql://192.168.31.222:3306/cstauth?useUnicode=true
+      username: gzcstauth
+      password: gzcstauth
   canalAdapters:
-  - instance: oracle # canal instance Name or mq topic name   example
-    groups:
-    - groupId: g1
-      outerAdapters:
-      - name: logger
-      - name: rdb
-        key: oracle1
-        properties:
-          jdbc.driverClassName: oracle.jdbc.OracleDriver
-          jdbc.url: jdbc:oracle:thin:@194.1.1.240:1521:oneserver
-          jdbc.username: dqwebpor
-          jdbc.password: dqwebpor
+    - instance: oracle # canal instance Name or mq topic name   example
+      groups:
+        - groupId: g1
+          outerAdapters:
+            - name: logger
+            - name: rdb
+              key: oracle1
+              properties:
+                jdbc.driverClassName: oracle.jdbc.OracleDriver
+                jdbc.url: jdbc:oracle:thin:@194.1.1.240:1521:oneserver
+                jdbc.username: dqwebpor
+                jdbc.password: dqwebpor
 #      - name: rdb
 #        key: postgres1
 #        properties:
